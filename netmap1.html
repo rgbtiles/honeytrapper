@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Network map</title>
+<style>
+:root{
+  --bg:#f3f5f7; --panel:#ffffff; --ink:#17212b; --muted:#5d6b78; --line:#c3ccd5; --rule:#dde3e8;
+  --gateway:#1f5fbf; --switch:#0b6e8a; --self:#0e8f7e; --server:#6b5bd6; --windows:#2f86d4; --printer:#c98a12;
+  --camera:#b5338a; --mobile:#d2553d; --iot:#4d9a3f; --unknown:#8a97a3; --network:#5d6b78; --warn:#d9480f;
+}
+@media (prefers-color-scheme:dark){
+  :root{ --bg:#10161c; --panel:#18212a; --ink:#e8edf1; --muted:#93a1ad; --line:#334350; --rule:#26323c;
+         --warn:#ff8a5c; --switch:#2fa3c4; --network:#93a1ad; --gateway:#4a8de0; }
+}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{font:14px/1.45 system-ui,-apple-system,"Segoe UI",sans-serif;background:var(--bg);color:var(--ink);display:grid;grid-template-columns:1fr 330px;grid-template-rows:auto 1fr;grid-template-areas:"top top" "map side"}
+header{grid-area:top;display:flex;flex-wrap:wrap;gap:12px 28px;align-items:baseline;padding:14px 20px;border-bottom:1px solid var(--rule);background:var(--panel)}
+header h1{font-size:16px;font-weight:650;margin:0}
+header span{color:var(--muted)}
+header b{color:var(--ink);font-weight:600}
+#mapwrap{grid-area:map;position:relative;min-width:0;min-height:0}
+svg{width:100%;height:100%;display:block;touch-action:none}
+aside{grid-area:side;background:var(--panel);border-left:1px solid var(--rule);padding:16px 18px;overflow:auto}
+aside h2{font-size:13px;font-weight:650;margin:18px 0 8px}
+aside h2:first-child{margin-top:0}
+input[type=search]{width:100%;padding:8px 10px;border:1px solid var(--line);border-radius:6px;background:var(--bg);color:var(--ink);font:inherit}
+input[type=search]:focus-visible,button:focus-visible,.chip:focus-visible,g.node:focus-visible{outline:2px solid var(--gateway);outline-offset:2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{display:inline-flex;gap:6px;align-items:center;padding:4px 9px;border:1px solid var(--line);border-radius:99px;background:none;color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer}
+.chip i{width:9px;height:9px;border-radius:50%;background:var(--c)}
+.chip[aria-pressed=false]{opacity:.45}
+dl{margin:0;display:grid;grid-template-columns:92px 1fr;gap:6px 10px}
+dt{color:var(--muted)}
+dd{margin:0;word-break:break-word}
+.plist{list-style:none;margin:0;padding:0}
+.plist li{padding:7px 0;border-bottom:1px solid var(--rule)}
+.pn{font-weight:600}
+.pb{color:var(--muted);font-size:12.5px;word-break:break-word}
+.conn{display:block;width:100%;text-align:left;background:none;border:0;border-bottom:1px solid var(--rule);padding:7px 0;color:var(--ink);font:inherit;cursor:pointer}
+.conn:hover .cn{text-decoration:underline}
+.conn .cn{font-weight:600}
+.conn .cs{display:block;color:var(--muted);font-size:12.5px}
+.hint{color:var(--muted)}
+.link{stroke:var(--line);stroke-width:1.5}
+.link.dash{stroke-dasharray:4 5}
+.link.hl{stroke:var(--ink);stroke-width:2}
+.lp{fill:var(--muted);font-size:11px;text-anchor:middle;paint-order:stroke;stroke:var(--bg);stroke-width:4px;display:none;pointer-events:none}
+.lp.on{display:block}
+.node .body{fill:var(--c);stroke:var(--bg);stroke-width:3}
+.node .halo{fill:none;stroke:var(--c);stroke-opacity:.35;stroke-width:1.5}
+.node circle.flag{fill:var(--warn);stroke:var(--bg);stroke-width:2}
+.node text{fill:var(--ink);font-size:12px;text-anchor:middle;pointer-events:none;paint-order:stroke;stroke:var(--bg);stroke-width:4px}
+.node text.sub{fill:var(--muted);font-size:11px}
+.node{cursor:grab}
+.node.sel .body{stroke:var(--ink)}
+.dim{opacity:.15}
+.hide{display:none}
+@media (max-width:760px){
+  body{grid-template-columns:1fr;grid-template-rows:auto 1fr auto;grid-template-areas:"top" "map" "side"}
+  aside{border-left:0;border-top:1px solid var(--rule);max-height:42vh}
+}
+</style>
+</head>
+<body>
+<header>
+  <h1>Network map</h1>
+  <span>Range <b id="h-cidr"></b></span>
+  <span>Hosts up <b id="h-count"></b></span>
+  <span>Topology <b id="h-topo"></b></span>
+  <span>With flagged ports <b id="h-flag"></b></span>
+  <span>Scanned <b id="h-when"></b></span>
+</header>
+<div id="mapwrap"><svg id="map" role="img" aria-label="Network map"></svg></div>
+<aside>
+  <h2>Find a device</h2>
+  <input type="search" id="q" placeholder="IP, name, MAC, port or banner" aria-label="Find a device">
+  <h2>Device types</h2>
+  <div class="chips" id="chips"></div>
+  <h2 id="dtitle">Details</h2>
+  <div id="detail"><p class="hint">Select a device to see its address, connections and open ports. Drag devices to rearrange them. Square nodes are network equipment.</p></div>
+</aside>
+<script>
+const DATA = {"generated": "2026-11-14T23:53:43", "duration_s": 33.7, "cidr": "10.204.122.0/24", "networks": ["10.204.122.0/24"], "gateway": "10.204.122.1", "self": "10.204.122.108", "methods": ["arp", "udp", "icmp", "tcp"], "hosts": [{"ip": "10.204.122.1", "hostname": "", "mac": "08:f1:b3:6b:19:99", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "gateway", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.6", "hostname": "", "mac": "f4:e2:c6:cc:f2:18", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.9", "hostname": "", "mac": "9c:05:d6:a2:73:5c", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.12", "hostname": "", "mac": "16:71:2c:5f:e2:82", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.18", "hostname": "", "mac": "50:1e:2d:4b:08:f6", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.21", "hostname": "", "mac": "fc:84:a7:35:ef:20", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.51", "hostname": "", "mac": "c4:8b:66:52:06:81", "rtt_ms": null, "found_by": ["arp", "mdns", "ssdp"], "ports": [{"port": 7000, "proto": "tcp", "service": "airplay", "banner": "", "tls": ""}], "flags": [], "type": "unknown", "port_summary": {"open": 1, "closed": 15, "filtered": 93}}, {"ip": "10.204.122.60", "hostname": "", "mac": "50:41:1c:9a:b5:c8", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.90", "hostname": "", "mac": "c6:0a:bd:e6:91:6d", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.101", "hostname": "", "mac": "4e:72:5c:7e:7a:44", "rtt_ms": null, "found_by": ["arp", "mdns"], "ports": [{"port": 7000, "proto": "tcp", "service": "airplay", "banner": "", "tls": ""}, {"port": 8008, "proto": "tcp", "service": "cast-http", "banner": "", "tls": ""}, {"port": 8009, "proto": "tcp", "service": "cast", "banner": "", "tls": ""}, {"port": 8443, "proto": "tcp", "service": "https-alt", "banner": "", "tls": "TLSv1.2"}], "flags": [], "type": "iot", "port_summary": {"open": 4, "closed": 15, "filtered": 90}}, {"ip": "10.204.122.108", "hostname": "DESKTOP-1BKV6LJ", "mac": "", "rtt_ms": null, "found_by": ["local"], "ports": [{"port": 135, "proto": "tcp", "service": "msrpc", "banner": "", "tls": ""}, {"port": 139, "proto": "tcp", "service": "netbios", "banner": "", "tls": ""}, {"port": 445, "proto": "tcp", "service": "smb", "banner": "", "tls": ""}], "flags": [{"port": 135, "note": "Windows RPC is reachable"}, {"port": 139, "note": "SMB file sharing is reachable"}, {"port": 445, "note": "SMB file sharing is reachable"}], "type": "self", "port_summary": {"open": 3, "closed": 15, "filtered": 91}}, {"ip": "10.204.122.112", "hostname": "", "mac": "50:41:1c:9a:95:de", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.120", "hostname": "", "mac": "b4:e9:b8:48:9d:04", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.224", "hostname": "", "mac": "c4:8b:66:51:82:c9", "rtt_ms": null, "found_by": ["arp", "mdns", "ssdp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 15, "filtered": 94}}, {"ip": "10.204.122.225", "hostname": "", "mac": "36:c2:42:57:da:24", "rtt_ms": null, "found_by": ["arp"], "ports": [{"port": 49152, "proto": "tcp", "service": "tcp", "banner": "", "tls": ""}, {"port": 62078, "proto": "tcp", "service": "ios-sync", "banner": "", "tls": ""}], "flags": [], "type": "mobile", "port_summary": {"open": 2, "closed": 15, "filtered": 92}}, {"ip": "10.204.122.231", "hostname": "", "mac": "00:10:be:80:55:59", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.232", "hostname": "", "mac": "00:10:be:80:68:29", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.233", "hostname": "", "mac": "00:10:be:80:55:4c", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.234", "hostname": "", "mac": "00:10:be:80:68:18", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.235", "hostname": "", "mac": "00:10:be:80:68:17", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.236", "hostname": "", "mac": "00:10:be:80:68:16", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.237", "hostname": "", "mac": "00:10:be:80:68:0e", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.238", "hostname": "", "mac": "00:10:be:80:67:ab", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.239", "hostname": "", "mac": "00:10:be:80:68:1c", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}, {"ip": "10.204.122.254", "hostname": "", "mac": "00:10:be:51:d7:f9", "rtt_ms": null, "found_by": ["arp"], "ports": [], "flags": [], "type": "unknown", "port_summary": {"open": 0, "closed": 0, "filtered": 109}}], "hub": "10.204.122.1", "extra_nodes": [], "links": [{"a": "10.204.122.6", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.9", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.12", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.18", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.21", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.51", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.60", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.90", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.101", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.108", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.112", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.120", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.224", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.225", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.231", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.232", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.233", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.234", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.235", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.236", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.237", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.238", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.239", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}, {"a": "10.204.122.254", "b": "10.204.122.1", "a_port": "", "b_port": "", "via": "inferred"}]};
+const TYPES = {
+  gateway:"Router", switch:"Switch", self:"This device", server:"Server", windows:"Windows PC", printer:"Printer",
+  camera:"Camera", mobile:"Phone / tablet", iot:"Web-enabled device", unknown:"Unidentified", network:"Network"
+};
+const VIA = {arp:"ARP", icmp:"ping", tcp:"TCP connect", nbns:"NetBIOS", mdns:"mDNS", ssdp:"UPnP", snmp:"SNMP", local:"this machine"};
+const LINKVIA = {fdb:"the switch's MAC table", lldp:"LLDP", traceroute:"traceroute", subnet:"subnet membership", inferred:"assumed, no switch data"};
+const INFRA = new Set(["gateway", "switch", "network"]);
+const NS = "http://www.w3.org/2000/svg";
+const svg = document.getElementById("map");
+const $ = id => document.getElementById(id);
+const el = (name, attrs = {}, parent) => {
+  const e = document.createElementNS(NS, name);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.appendChild(e);
+  return e;
+};
+const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+const W = () => svg.clientWidth, H = () => svg.clientHeight;
+
+// ---- Build the graph ------------------------------------------------------
+const nodes = DATA.hosts.map(h => ({...h, id: h.ip, ports: h.ports || [], flags: h.flags || []}));
+(DATA.extra_nodes || []).forEach(e => nodes.push({
+  id: e.id, ip: e.ip || "", hostname: "", mac: "", ports: [], flags: [], found_by: [],
+  type: e.type, label: e.label, note: e.note || "", virtual: true
+}));
+let hub = nodes.find(n => n.id === DATA.hub) || nodes.find(n => n.type === "gateway");
+if (!hub) {
+  hub = {id: "__hub__", ip: "", hostname: "", mac: "", ports: [], flags: [], found_by: [], type: "network",
+         label: DATA.cidr, note: "No gateway was found, so the range is drawn as the centre.", virtual: true};
+  nodes.unshift(hub);
+}
+const byId = new Map(nodes.map(n => [n.id, n]));
+const links = (DATA.links || []).map(l => ({...l, na: byId.get(l.a), nb: byId.get(l.b)})).filter(l => l.na && l.nb);
+const adj = new Map(nodes.map(n => [n.id, []]));
+links.forEach(l => { adj.get(l.a).push(l); adj.get(l.b).push(l); });
+
+nodes.forEach(n => { n.depth = -1; n.children = []; n.size = 1; });
+const order = [];
+function grow(root) {
+  order.push(root);
+  for (let i = order.indexOf(root); i < order.length; i++) {
+    const u = order[i];
+    adj.get(u.id).forEach(l => {
+      const v = l.na === u ? l.nb : l.na;
+      if (v.depth < 0) { v.depth = u.depth + 1; v.parent = u; u.children.push(v); order.push(v); }
+    });
+  }
+}
+hub.depth = 0; grow(hub);
+for (;;) {  // anything unreachable hangs off the hub as an assumed link
+  const rest = nodes.filter(n => n.depth < 0);
+  if (!rest.length) break;
+  const rep = rest.reduce((a, b) => adj.get(b.id).length > adj.get(a.id).length ? b : a);
+  const l = {a: hub.id, b: rep.id, na: hub, nb: rep, via: "inferred", a_port: "", b_port: ""};
+  links.push(l); adj.get(hub.id).push(l); adj.get(rep.id).push(l);
+  rep.depth = 1; rep.parent = hub; hub.children.push(rep); grow(rep);
+}
+for (let i = order.length - 1; i > 0; i--) order[i].parent.size += order[i].size;
+const anyReal = links.some(l => l.via !== "inferred");
+
+$("h-cidr").textContent = DATA.cidr;
+$("h-count").textContent = DATA.hosts.length;
+$("h-flag").textContent = DATA.hosts.filter(h => h.flags && h.flags.length).length;
+$("h-topo").textContent = anyReal ? links.filter(l => l.via !== "inferred").length + " measured links" : "assumed from the gateway";
+$("h-when").textContent = DATA.generated.replace("T", " ") + " (" + DATA.duration_s + " s)";
+
+const nodeLabel = n => n.label || (n.hostname ? n.hostname.split(".")[0] : n.ip);
+const linkLayer = el("g", {}, svg);
+const nodeLayer = el("g", {}, svg);
+links.forEach(l => {
+  l.line = el("line", {class: "link" + (anyReal && l.via === "inferred" ? " dash" : "")}, linkLayer);
+  l.ta = el("text", {class: "lp"}, linkLayer); l.ta.textContent = l.a_port || "";
+  l.tb = el("text", {class: "lp"}, linkLayer); l.tb.textContent = l.b_port || "";
+});
+nodes.forEach(n => {
+  n.r = n === hub ? 24 : n.type === "switch" ? 18 : n.type === "network" ? 16 : 11 + Math.min(n.ports.length, 6) * 1.5;
+  const g = el("g", {class: "node", tabindex: 0, role: "button", "aria-label": nodeLabel(n) + ", " + TYPES[n.type]}, nodeLayer);
+  g.style.setProperty("--c", "var(--" + n.type + ")");
+  const infra = INFRA.has(n.type);
+  const shape = (cls, r) => infra
+    ? el("rect", {class: cls, x: -r, y: -r, width: 2 * r, height: 2 * r, rx: Math.round(r * 0.38)}, g)
+    : el("circle", {class: cls, r}, g);
+  if (n.ports.length) shape("halo", n.r + 6);
+  shape("body", n.r);
+  if (n.flags.length) el("circle", {class: "flag", r: 5.5, cx: n.r * 0.72, cy: -n.r * 0.72}, g);
+  const name = nodeLabel(n);
+  const t1 = el("text", {y: n.r + 16}, g); t1.textContent = name.length > 18 ? name.slice(0, 17) + "…" : name;
+  if (n.hostname && !n.virtual && n.ip) { const t2 = el("text", {class: "sub", y: n.r + 29}, g); t2.textContent = n.ip; }
+  n.g = g;
+  g.addEventListener("click", () => select(n));
+  g.addEventListener("keydown", e => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); select(n); } });
+  g.addEventListener("pointerdown", e => startDrag(e, n));
+});
+
+// ---- Layout and physics ---------------------------------------------------
+function layout() {
+  const cx = W() / 2, cy = H() / 2;
+  const maxDepth = Math.max(1, ...nodes.map(n => n.depth));
+  const ring = Math.min(W(), H()) * 0.42 / maxDepth;
+  (function place(n, a0, a1) {
+    const a = (a0 + a1) / 2;
+    n.x = cx + Math.cos(a) * ring * n.depth; n.y = cy + Math.sin(a) * ring * n.depth; n.vx = n.vy = 0;
+    let start = a0;
+    n.children.forEach(c => { const span = (a1 - a0) * c.size / (n.size - 1); place(c, start, start + span); start += span; });
+  })(hub, 0, 2 * Math.PI);
+  const hubRest = Math.min(Math.min(W(), H()) * 0.4, 110 + hub.children.length * 4);
+  links.forEach(l => {
+    const child = l.na.depth > l.nb.depth ? l.na : l.nb;
+    const parent = child === l.na ? l.nb : l.na;
+    l.rest = clamp(55 + 20 * Math.sqrt(child.size), 70, 200);
+    if (parent === hub) l.rest = Math.max(l.rest, hubRest);
+  });
+}
+let alpha = 1, drag = null, selected = null, running = false;
+function step() {
+  for (let i = 0; i < nodes.length; i++) {
+    for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y, d2 = dx * dx + dy * dy || 0.01;
+      if (d2 > 90000) continue;
+      const d = Math.sqrt(d2), f = (4200 / d2) * alpha;
+      dx /= d; dy /= d;
+      a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+    }
+  }
+  links.forEach(l => {
+    const dx = l.nb.x - l.na.x, dy = l.nb.y - l.na.y, d = Math.hypot(dx, dy) || 1, f = (d - l.rest) * 0.03 * alpha;
+    l.na.vx += (dx / d) * f; l.na.vy += (dy / d) * f; l.nb.vx -= (dx / d) * f; l.nb.vy -= (dy / d) * f;
+  });
+  hub.vx += (W() / 2 - hub.x) * 0.02; hub.vy += (H() / 2 - hub.y) * 0.02;
+  nodes.forEach(n => {
+    if (n === drag) { n.vx = n.vy = 0; return; }
+    n.vx *= 0.8; n.vy *= 0.8;
+    n.x = clamp(n.x + n.vx, 40, W() - 40); n.y = clamp(n.y + n.vy, 40, H() - 50);
+  });
+  alpha *= 0.985;
+}
+function draw() {
+  links.forEach(l => {
+    const {na: a, nb: b} = l;
+    l.line.setAttribute("x1", a.x); l.line.setAttribute("y1", a.y); l.line.setAttribute("x2", b.x); l.line.setAttribute("y2", b.y);
+    l.ta.setAttribute("x", a.x + (b.x - a.x) * 0.3); l.ta.setAttribute("y", a.y + (b.y - a.y) * 0.3 - 4);
+    l.tb.setAttribute("x", a.x + (b.x - a.x) * 0.7); l.tb.setAttribute("y", a.y + (b.y - a.y) * 0.7 - 4);
+  });
+  nodes.forEach(n => n.g.setAttribute("transform", "translate(" + n.x + "," + n.y + ")"));
+}
+function loop() {
+  if (alpha > 0.02 || drag) { step(); draw(); requestAnimationFrame(loop); } else { running = false; }
+}
+function reheat(a) { alpha = Math.max(alpha, a); if (!running) { running = true; requestAnimationFrame(loop); } }
+function startDrag(e, n) {
+  drag = n; n.g.setPointerCapture(e.pointerId); n.g.style.cursor = "grabbing";
+  const move = ev => {
+    const r = svg.getBoundingClientRect();
+    n.x = clamp(ev.clientX - r.left, 30, W() - 30); n.y = clamp(ev.clientY - r.top, 30, H() - 30);
+    draw(); reheat(0.3);
+  };
+  const up = () => {
+    drag = null; n.g.style.cursor = "";
+    n.g.removeEventListener("pointermove", move); n.g.removeEventListener("pointerup", up);
+  };
+  n.g.addEventListener("pointermove", move); n.g.addEventListener("pointerup", up);
+}
+
+// ---- Details panel --------------------------------------------------------
+function row(dl, k, v) {
+  const dt = document.createElement("dt"); dt.textContent = k;
+  const dd = document.createElement("dd"); dd.textContent = v || "unknown";
+  dl.append(dt, dd);
+}
+function heading(box, text) { const h = document.createElement("h2"); h.textContent = text; box.appendChild(h); }
+function uptime(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600); return d ? d + " d " + h + " h" : h + " h " + Math.floor(s % 3600 / 60) + " min"; }
+function select(n) {
+  if (selected) selected.g.classList.remove("sel");
+  selected = n; n.g.classList.add("sel");
+  links.forEach(l => {
+    const on = l.na === n || l.nb === n;
+    l.line.classList.toggle("hl", on); l.ta.classList.toggle("on", on); l.tb.classList.toggle("on", on);
+  });
+  const box = $("detail"); box.textContent = "";
+  $("dtitle").textContent = nodeLabel(n);
+  const dl = document.createElement("dl");
+  if (n.ip) row(dl, "Address", n.ip);
+  if (n.hostname) row(dl, "Hostname", n.hostname);
+  if (!n.virtual) row(dl, "MAC", n.mac);
+  row(dl, "Type", TYPES[n.type] + (n.type === "unknown" || n.type === "iot" ? " (a guess from open ports)" : ""));
+  if (n.snmp) {
+    if (n.snmp.sys_descr) row(dl, "Description", n.snmp.sys_descr);
+    row(dl, "Uptime", uptime(n.snmp.uptime_s));
+    row(dl, "Learned MACs", n.snmp.macs_learned + " addresses, " + n.snmp.lldp_neighbours + " LLDP neighbours");
+  }
+  if (n.rtt_ms != null) row(dl, "Response", n.rtt_ms + " ms");
+  if (n.found_by && n.found_by.length) row(dl, "Found by", n.found_by.map(m => VIA[m] || m).join(", "));
+  if (n.port_summary) row(dl, "Port scan", n.port_summary.open + " open, " + n.port_summary.closed + " closed, " + n.port_summary.filtered + " filtered");
+  box.appendChild(dl);
+  if (n.note) { const p = document.createElement("p"); p.className = "hint"; p.textContent = n.note; box.appendChild(p); }
+
+  const mine = adj.get(n.id);
+  if (mine.length) {
+    heading(box, "Connections");
+    mine.forEach(l => {
+      const other = l.na === n ? l.nb : l.na;
+      const here = l.na === n ? l.a_port : l.b_port, there = l.na === n ? l.b_port : l.a_port;
+      const btn = document.createElement("button"); btn.className = "conn"; btn.type = "button";
+      const cn = document.createElement("span"); cn.className = "cn"; cn.textContent = nodeLabel(other);
+      const parts = [];
+      if (there) parts.push("port " + there + " on " + nodeLabel(other));
+      if (here) parts.push("this device's port " + here);
+      parts.push("from " + LINKVIA[l.via]);
+      const cs = document.createElement("span"); cs.className = "cs"; cs.textContent = parts.join(", ");
+      btn.append(cn, cs); btn.addEventListener("click", () => select(other)); box.appendChild(btn);
+    });
+  }
+  if (!n.virtual) {
+    heading(box, "Open ports");
+    if (n.ports.length) {
+      const ul = document.createElement("ul"); ul.className = "plist";
+      n.ports.forEach(p => {
+        const li = document.createElement("li");
+        const head = document.createElement("span"); head.className = "pn";
+        head.textContent = p.port + "/" + (p.proto || "tcp") + " " + p.service + (p.tls ? " (" + p.tls + ")" : "");
+        li.appendChild(head);
+        if (p.banner) { const b = document.createElement("div"); b.className = "pb"; b.textContent = p.banner; li.appendChild(b); }
+        ul.appendChild(li);
+      });
+      box.appendChild(ul);
+    } else {
+      const p = document.createElement("p"); p.className = "hint"; p.textContent = "No open ports found among the ports scanned."; box.appendChild(p);
+    }
+    if (n.flags.length) {
+      heading(box, "Worth checking");
+      const ul2 = document.createElement("ul"); ul2.className = "plist";
+      n.flags.forEach(f => { const li = document.createElement("li"); li.textContent = "Port " + f.port + ": " + f.note; ul2.appendChild(li); });
+      box.appendChild(ul2);
+    }
+  }
+}
+
+// ---- Filters --------------------------------------------------------------
+const hidden = new Set();
+[...new Set(nodes.map(n => n.type))].forEach(t => {
+  const b = document.createElement("button");
+  b.className = "chip"; b.setAttribute("aria-pressed", "true"); b.style.setProperty("--c", "var(--" + t + ")");
+  b.append(document.createElement("i"), document.createTextNode(TYPES[t] + " " + nodes.filter(n => n.type === t).length));
+  b.addEventListener("click", () => {
+    hidden.has(t) ? hidden.delete(t) : hidden.add(t);
+    b.setAttribute("aria-pressed", hidden.has(t) ? "false" : "true"); applyFilter();
+  });
+  $("chips").appendChild(b);
+});
+function matches(n, q) {
+  if (!q) return true;
+  const hay = [n.id, n.ip, n.label, n.hostname, n.mac, n.type, ...n.ports.map(p => [p.port, p.service, p.banner].join(" "))].join(" ").toLowerCase();
+  return q.split(/\s+/).every(w => hay.includes(w));
+}
+function applyFilter() {
+  const q = $("q").value.trim().toLowerCase();
+  nodes.forEach(n => {
+    n.g.classList.toggle("hide", hidden.has(n.type) && n !== hub);
+    n.g.classList.toggle("dim", !matches(n, q));
+  });
+  links.forEach(l => {
+    l.line.classList.toggle("hide", (hidden.has(l.na.type) && l.na !== hub) || (hidden.has(l.nb.type) && l.nb !== hub));
+    l.line.classList.toggle("dim", !matches(l.na, q) && !matches(l.nb, q));
+  });
+}
+$("q").addEventListener("input", applyFilter);
+
+layout(); draw(); reheat(1);
+addEventListener("resize", () => { layout(); reheat(1); });
+if (nodes.length === 1) $("detail").insertAdjacentHTML("beforeend", "<p class='hint'>No hosts answered. Check the range, or that this machine can reach it.</p>");
+</script>
+</body>
+</html>
