@@ -1,2 +1,2 @@
-# netmapper
-netmap tool for mapping networks
+# honeytrapper
+honeytrap tool for honeytrapping devices
